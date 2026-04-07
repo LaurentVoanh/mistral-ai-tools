@@ -1,7 +1,8 @@
 <?php
 /**
  * AUDIT SERVEUR COMPLET POUR AGENT IA AUTONOME
- * Ce script génère le contexte d'exécution strict pour une IA génératrice de code.
+ * Ce script génère le contexte d'exécution strict pour une IA génératrice de code
+ * et l'enregistre automatiquement dans serveur.txt.
  */
 
 // --- 1. SYSTÈME ET ENVIRONNEMENT ---
@@ -11,7 +12,7 @@ $php_version = phpversion();
 $server_software = $_SERVER['SERVER_SOFTWARE'] ?? 'Inconnu';
 $user = get_current_user();
 
-// --- 2. DROITS DU SYSTÈME DE FICHIERS (Crucial pour un auto-codeur) ---
+// --- 2. DROITS DU SYSTÈME DE FICHIERS ---
 $current_dir = __DIR__;
 $is_writable = is_writable($current_dir) ? "OUI" : "NON";
 $is_readable = is_readable($current_dir) ? "OUI" : "NON";
@@ -32,7 +33,7 @@ $ini_settings = [
     'open_basedir' => ini_get('open_basedir') ?: 'Aucune restriction',
 ];
 
-// --- 4. ANALYSE SÉCURITAIRE (disable_functions & disable_classes) ---
+// --- 4. ANALYSE SÉCURITAIRE ---
 $raw_disabled_funcs = ini_get('disable_functions');
 $disabled_functions = $raw_disabled_funcs ? array_map('trim', explode(',', $raw_disabled_funcs)) : [];
 $raw_disabled_classes = ini_get('disable_classes');
@@ -42,7 +43,6 @@ $disabled_classes = $raw_disabled_classes ? array_map('trim', explode(',', $raw_
 $loaded_extensions = get_loaded_extensions();
 natcasesort($loaded_extensions);
 
-// Catégorisation pour l'IA (pour qu'elle comprenne CE QU'ELLE PEUT FAIRE)
 $capabilities = [
     'Réseau & API' => ['curl', 'sockets', 'stream', 'soap', 'ftp'],
     'Bases de données' => ['pdo', 'pdo_mysql', 'pdo_sqlite', 'mysqli', 'sqlite3', 'redis', 'mongodb'],
@@ -103,8 +103,19 @@ $prompt .= "2. Gère toutes les exceptions avec des blocs try/catch pour éviter
 $prompt .= "3. Si tu dois communiquer avec des API externes, utilise de préférence cURL si listé dans les capacités, sinon file_get_contents si allow_url_fopen est Activé.\n";
 $prompt .= "4. Formate tes réponses uniquement en code valide, prêt à être écrit sur le disque dans cet environnement précis.";
 
-?>
+// --- 7. EXPORT VERS SERVEUR.TXT ---
+$file_creation_status = "";
+try {
+    if (file_put_contents('serveur.txt', $prompt)) {
+        $file_creation_status = "Le fichier serveur.txt a été mis à jour avec succès.";
+    } else {
+        $file_creation_status = "Erreur lors de l'écriture du fichier serveur.txt.";
+    }
+} catch (Exception $e) {
+    $file_creation_status = "Exception : " . $e->getMessage();
+}
 
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -122,6 +133,7 @@ $prompt .= "4. Formate tes réponses uniquement en code valide, prêt à être �
         .prompt-box { background: #000; padding: 20px; border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; font-size: 0.9em; overflow-x: auto; color: #a5d6ff; }
         button { background: var(--success); color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; display: block; margin: 20px 0; font-family: inherit; }
         button:hover { background: #238636; }
+        .status-msg { padding: 10px; background: #21262d; border-left: 4px solid var(--accent); margin-bottom: 20px; font-size: 0.9em; }
         ul { padding-left: 20px; }
     </style>
 </head>
@@ -130,6 +142,10 @@ $prompt .= "4. Formate tes réponses uniquement en code valide, prêt à être �
 <div class="container">
     <h1>Terminal d'Audit : Initialisation Agent Autonome</h1>
     
+    <div class="status-msg">
+        <strong>Statut Export :</strong> <?php echo $file_creation_status; ?>
+    </div>
+
     <div class="grid">
         <div class="card">
             <h3>I/O & Fichiers</h3>
@@ -157,7 +173,7 @@ $prompt .= "4. Formate tes réponses uniquement en code valide, prêt à être �
     </div>
 
     <h2>System Prompt Généré pour l'Agent</h2>
-    <p>Ce texte est formaté spécifiquement pour servir de <strong>System Prompt</strong> (ou de directive système initiale) à ton agent IA autonome. Il lui donne ses règles de survie sur ce serveur précis.</p>
+    <p>Ce texte est formaté spécifiquement pour servir de <strong>System Prompt</strong>. Il a également été sauvegardé dans <code>serveur.txt</code>.</p>
     
     <button onclick="copyPrompt()">Copier le System Prompt</button>
     <div class="prompt-box" id="aiPrompt"><?php echo htmlspecialchars($prompt); ?></div>
