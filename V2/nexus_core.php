@@ -181,7 +181,7 @@ function callMistral(string $api_key, string $model, array $messages, bool $json
         $payload['response_format'] = ['type' => 'json_object'];
     }
 
-    // Essayer cURL en premier, fallback sur file_get_contents
+    // Essayer cURL en premier (plus fiable), fallback sur file_get_contents si stream disponible
     if (function_exists('curl_init')) {
         $ch = curl_init('https://api.mistral.ai/v1/chat/completions');
         curl_setopt_array($ch, [
@@ -202,7 +202,7 @@ function callMistral(string $api_key, string $model, array $messages, bool $json
             error_log("Mistral API Error: HTTP $http_code - " . substr($raw ?? '', 0, 200));
             return null;
         }
-    } else {
+    } elseif (function_exists('stream_context_create') && ini_get('allow_url_fopen')) {
         $context = stream_context_create([
             'http' => [
                 'method'  => 'POST',
@@ -213,6 +213,9 @@ function callMistral(string $api_key, string $model, array $messages, bool $json
         ]);
         $raw = @file_get_contents('https://api.mistral.ai/v1/chat/completions', false, $context);
         if (!$raw) return null;
+    } else {
+        error_log("Aucune méthode HTTP disponible (ni cURL, ni stream)");
+        return null;
     }
 
     $data = json_decode($raw, true);
@@ -332,18 +335,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nexus_action'])) {
             try {
                 $rss_content = @file_get_contents($url);
                 if ($rss_content) {
-                    $xml = simplexml_load_string($rss_content);
-                    if ($xml && isset($xml->channel->item)) {
-                        foreach ($xml->channel->item as $item) {
-                            $title = (string)$item->title;
-                            // Nettoyer le titre
-                            $clean_title = preg_replace('/^\[[^\]]*\]\s*/', '', $title);
-                            if (strlen($clean_title) > 10) {
-                                $all_topics[] = [
-                                    'topic' => $clean_title,
-                                    'source' => $source,
-                                    'timestamp' => strtotime((string)$item->pubDate)
-                                ];
+                    // Vérifier si SimpleXML est disponible
+                    if (function_exists('simplexml_load_string')) {
+                        $xml = @simplexml_load_string($rss_content);
+                        if ($xml && isset($xml->channel->item)) {
+                            foreach ($xml->channel->item as $item) {
+                                $title = (string)$item->title;
+                                // Nettoyer le titre
+                                $clean_title = preg_replace('/^\[[^\]]*\]\s*/', '', $title);
+                                if (strlen($clean_title) > 10) {
+                                    $all_topics[] = [
+                                        'topic' => $clean_title,
+                                        'source' => $source,
+                                        'timestamp' => strtotime((string)$item->pubDate)
+                                    ];
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback: parsing manuel basique du RSS
+                        if (preg_match_all('/<title>([^<]+)<\/title>/', $rss_content, $matches)) {
+                            foreach ($matches[1] as $title) {
+                                $clean_title = preg_replace('/^\[[^\]]*\]\s*/', '', $title);
+                                if (strlen($clean_title) > 10 && !strpos($clean_title, 'Google Actualités')) {
+                                    $all_topics[] = ['topic' => $clean_title, 'source' => $source, 'timestamp' => time()];
+                                }
                             }
                         }
                     }
@@ -388,12 +404,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nexus_action'])) {
         $top_wisdom = $db->query("SELECT principle, confidence FROM semantic_wisdom WHERE confidence > 0.8 LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
         
         // Fetch tendances
-        $trends_json = file_get_contents('https://news.google.com/rss?hl=fr&gl=FR&ceid=FR:fr');
         $trend_titles = [];
-        if ($trends_json) {
-            $xml = @simplexml_load_string($trends_json);
-            if ($xml && isset($xml->channel->item)) {
-                $trend_titles = array_map(fn($i) => (string)$i->title, array_slice(iterator_to_array($xml->channel->item), 0, 10));
+        if (ini_get('allow_url_fopen')) {
+            $trends_json = @file_get_contents('https://news.google.com/rss?hl=fr&gl=FR&ceid=FR:fr');
+            if ($trends_json) {
+                // Vérifier si SimpleXML est disponible
+                if (function_exists('simplexml_load_string')) {
+                    $xml = @simplexml_load_string($trends_json);
+                    if ($xml && isset($xml->channel->item)) {
+                        $trend_titles = array_map(fn($i) => (string)$i->title, array_slice(iterator_to_array($xml->channel->item), 0, 10));
+                    }
+                } else {
+                    // Fallback parsing manuel
+                    if (preg_match_all('/<title>([^<]+)<\/title>/', $trends_json, $matches)) {
+                        $trend_titles = array_filter(array_slice($matches[1], 1, 10), fn($t) => strlen($t) > 10 && !strpos($t, 'Google Actualités'));
+                    }
+                }
             }
         }
         
