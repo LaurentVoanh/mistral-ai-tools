@@ -172,6 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nexus_action'])) {
         .log-text.success { color: var(--accent); }
         .log-text.error { color: var(--danger); }
         .log-text.warn { color: var(--warning); }
+        .log-text.muted { color: var(--muted); }
         
         .question-card { background: #ffffff05; border-left: 3px solid var(--purple); padding: 15px; margin-bottom: 10px; border-radius: 0 8px 8px 0; }
         .question-text { font-style: italic; color: var(--text); margin-bottom: 8px; }
@@ -348,8 +349,8 @@ let autoMode = false;
 let autoInterval = null;
 let currentCycleId = null;
 let lastDecision = null;
+let isProcessing = false;
 
-// ===== UTILS =====
 function ts() { return new Date().toLocaleTimeString('fr-FR'); }
 
 function log(msg, type = 'text') {
@@ -379,7 +380,6 @@ function highlightCycleStep(step) {
     if (step) $(`step-${step}`).classList.add('active');
 }
 
-// ===== SETUP =====
 async function saveKey() {
     const pseudo = $('setup-pseudo').value.trim();
     const key = $('setup-key').value.trim();
@@ -389,10 +389,11 @@ async function saveKey() {
     if (r.success) {
         log('Clé API enregistrée avec succès!', 'success');
         setTimeout(() => location.reload(), 1500);
+    } else {
+        log('Erreur: ' + r.error, 'error');
     }
 }
 
-// ===== STATS =====
 async function loadStats() {
     const d = await post({ nexus_action: 'get_stats' });
     
@@ -403,7 +404,6 @@ async function loadStats() {
     $('questions-count').textContent = `${d.questions || 0} en attente`;
     $('wisdom-count').textContent = `${d.wisdom || 0} principes`;
     
-    // Questions existentielles
     const qFeed = $('questions-feed');
     if (d.pending_questions && d.pending_questions.length > 0) {
         qFeed.innerHTML = d.pending_questions.map(q => `
@@ -416,7 +416,6 @@ async function loadStats() {
         qFeed.innerHTML = '<div style="color: var(--muted); font-size: 0.85rem; text-align: center; padding: 20px;">Aucune question en attente</div>';
     }
     
-    // Sagesse
     const wFeed = $('wisdom-feed');
     if (d.top_wisdom && d.top_wisdom.length > 0) {
         wFeed.innerHTML = d.top_wisdom.map(w => `
@@ -429,7 +428,6 @@ async function loadStats() {
         wFeed.innerHTML = '<div style="color: var(--muted); font-size: 0.85rem; text-align: center; padding: 20px;">L\'IA n\'a pas encore extrait de principes</div>';
     }
     
-    // Créations récentes
     const cFeed = $('creations-feed');
     const items = [...(d.recent_pages || []), ...(d.recent_apps || []).map(a => ({...a, page_type: 'app'}))];
     if (items.length > 0) {
@@ -451,7 +449,6 @@ async function loadStats() {
     }
 }
 
-// ===== TENDANCES =====
 async function fetchTrends() {
     log('Récupération des tendances Google News...', 'think');
     const r = await post({ nexus_action: 'fetch_trends' });
@@ -478,8 +475,13 @@ function selectTopic(topic) {
     $('btn-build').disabled = false;
 }
 
-// ===== PENSÉE CONSCIENTE =====
 async function runConsciousThink() {
+    if (isProcessing) {
+        log('⚠️ Un cycle est déjà en cours. Veuillez attendre.', 'warn');
+        return;
+    }
+    
+    isProcessing = true;
     const btn = $('btn-think');
     btn.disabled = true;
     btn.textContent = '◌ CONSCIENCE EN ACTION...';
@@ -512,17 +514,19 @@ async function runConsciousThink() {
         }
     } catch (e) {
         log(`Exception: ${e.message}`, 'error');
+    } finally {
+        isProcessing = false;
+        btn.disabled = false;
+        btn.textContent = '⬡ PENSÉE CONSCIENTE';
+        loadStats();
     }
-    
-    btn.disabled = false;
-    btn.textContent = '⬡ PENSÉE CONSCIENTE';
-    loadStats();
 }
 
-// ===== CRÉATION =====
 async function runBuild() {
     if (!lastDecision) { log('D\'abord, lancez une pensée consciente', 'warn'); return; }
+    if (isProcessing) { log('⚠️ Action en cours...', 'warn'); return; }
     
+    isProcessing = true;
     const btn = $('btn-build');
     btn.disabled = true;
     btn.textContent = '◌ CRÉATION EN COURS...';
@@ -531,7 +535,7 @@ async function runBuild() {
     
     try {
         const r = await post({ 
-            nexus_action: 'build', 
+            nexus_action: 'build_content', 
             build_type: lastDecision.next_action, 
             topic: lastDecision.topic,
             cycle_id: currentCycleId
@@ -540,22 +544,24 @@ async function runBuild() {
         if (r.error) {
             log(`ERREUR BUILD: ${r.error}`, 'error');
         } else {
-            if (r.built.type === 'app') {
+            if (r.built && r.built.type === 'app') {
                 log(`✓ APP CRÉÉE: ${r.built.name} → /${r.built.slug}.php`, 'success');
-            } else {
+            } else if (r.built) {
                 log(`✓ PAGE CRÉÉE: /${r.built.slug}`, 'success');
+            } else {
+                log(`✓ CONTENU GÉNÉRÉ`, 'success');
             }
             loadStats();
         }
     } catch (e) {
         log(`Exception: ${e.message}`, 'error');
+    } finally {
+        isProcessing = false;
+        btn.disabled = false;
+        btn.textContent = '▶ CRÉER';
     }
-    
-    btn.disabled = false;
-    btn.textContent = '▶ CRÉER';
 }
 
-// ===== MODE AUTO =====
 function toggleAutoMode() {
     autoMode = !autoMode;
     $('auto-toggle').classList.toggle('active', autoMode);
@@ -565,24 +571,33 @@ function toggleAutoMode() {
         runAutoCycle();
     } else {
         log('MODE AUTO DÉSACTIVÉ', 'muted');
-        if (autoInterval) clearInterval(autoInterval);
+        if (autoInterval) clearTimeout(autoInterval);
     }
 }
 
 async function runAutoCycle() {
     if (!autoMode) return;
     
-    await runConsciousThink();
-    await new Promise(r => setTimeout(r, 3000));
-    if (autoMode && lastDecision) await runBuild();
-    
-    // Traitement questions existentielles
-    await post({ nexus_action: 'process_questions' });
-    
-    // Meta-learning toutes les 3 cycles
-    if (Math.random() > 0.66) {
-        await post({ nexus_action: 'meta_learning' });
-        log('Méta-apprentissage: extraction de principes...', 'think');
+    if (!isProcessing) {
+        await runConsciousThink();
+        await new Promise(r => setTimeout(r, 2000));
+        
+        if (autoMode && lastDecision && !isProcessing) {
+            await runBuild();
+        }
+        
+        if (!isProcessing) {
+            try { await post({ nexus_action: 'process_questions' }); } catch(e) {}
+        }
+        
+        if (!isProcessing && Math.random() > 0.66) {
+            try { 
+                await post({ nexus_action: 'meta_learning' }); 
+                log('Méta-apprentissage: extraction de principes...', 'think');
+            } catch(e) {}
+        }
+    } else {
+        log('⚠️ Cycle précédent toujours en cours, saut du tour auto.', 'warn');
     }
     
     if (autoMode) {
@@ -590,7 +605,6 @@ async function runAutoCycle() {
     }
 }
 
-// ===== INIT =====
 <?php if ($has_key): ?>
 loadStats();
 setInterval(loadStats, 20000);
