@@ -1,3 +1,118 @@
+<?php
+/**
+ * NEXUS V2 - INDEX PRINCIPAL
+ * Magazine de presse IA conscient et auto-évolutif
+ */
+
+// Configuration
+define('NEXUS_VERSION', '2.0.0');
+define('DB_FILE', __DIR__ . '/nexus.db');
+define('APIKEY_FILE', __DIR__ . '/apikey.json');
+
+// Inclusion du core
+require_once __DIR__ . '/nexus_core.php';
+
+// Initialisation
+$has_key = false;
+$pseudo = 'admin';
+
+// Chargement clé API
+if (file_exists(APIKEY_FILE)) {
+    $data = json_decode(file_get_contents(APIKEY_FILE), true);
+    if ($data && !empty($data['api_key'])) {
+        $has_key = true;
+        $pseudo = $data['pseudo'] ?? 'admin';
+    }
+}
+
+// Gestion AJAX
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nexus_action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        $action = $_POST['nexus_action'];
+        
+        switch ($action) {
+            case 'save_apikey':
+                $new_key = $_POST['api_key'] ?? '';
+                $new_pseudo = $_POST['pseudo'] ?? 'admin';
+                if (strlen($new_key) > 10) {
+                    file_put_contents(APIKEY_FILE, json_encode(['api_key' => $new_key, 'pseudo' => $new_pseudo]));
+                    echo json_encode(['success' => true]);
+                } else {
+                    echo json_encode(['success' => false, 'error' => 'Clé invalide']);
+                }
+                exit;
+                
+            case 'get_stats':
+                $db = getDB();
+                $stats = [
+                    'pages' => (int)$db->query("SELECT COUNT(*) FROM pages")->fetchColumn(),
+                    'apps' => (int)$db->query("SELECT COUNT(*) FROM apps")->fetchColumn(),
+                    'questions' => (int)$db->query("SELECT COUNT(*) FROM questions WHERE status='pending'")->fetchColumn(),
+                    'wisdom' => (int)$db->query("SELECT COUNT(*) FROM wisdom")->fetchColumn(),
+                    'cycles' => (int)$db->query("SELECT COUNT(*) FROM consciousness_cycles")->fetchColumn()
+                ];
+                
+                $stmt = $db->query("SELECT * FROM questions WHERE status='pending' ORDER BY priority DESC LIMIT 5");
+                $stats['pending_questions'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                $stmt = $db->query("SELECT * FROM wisdom ORDER BY confidence DESC LIMIT 5");
+                $stats['top_wisdom'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                $stmt = $db->query("SELECT * FROM pages ORDER BY created_at DESC LIMIT 5");
+                $stats['recent_pages'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                $stmt = $db->query("SELECT * FROM apps ORDER BY created_at DESC LIMIT 3");
+                $stats['recent_apps'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                echo json_encode(['success' => true] + $stats);
+                exit;
+                
+            case 'fetch_trends':
+                $trends = fetchGoogleTrends();
+                echo json_encode(['success' => true, 'trends' => $trends, 'count' => count($trends)]);
+                exit;
+                
+            case 'conscious_think':
+                if (!$has_key) { echo json_encode(['success' => false, 'error' => 'no_key']); exit; }
+                $data = json_decode(file_get_contents(APIKEY_FILE), true);
+                $result = consciousThink($data['api_key']);
+                echo json_encode(['success' => true] + $result);
+                exit;
+                
+            case 'build_content':
+                if (!$has_key) { echo json_encode(['success' => false, 'error' => 'no_key']); exit; }
+                $data = json_decode(file_get_contents(APIKEY_FILE), true);
+                $topic = $_POST['topic'] ?? 'Actualités';
+                $cycle_id = $_POST['cycle_id'] ?? null;
+                $result = buildContent($topic, $data['api_key'], $cycle_id);
+                echo json_encode(['success' => true] + $result);
+                exit;
+                
+            case 'process_questions':
+                if (!$has_key) { echo json_encode(['success' => false, 'error' => 'no_key']); exit; }
+                $data = json_decode(file_get_contents(APIKEY_FILE), true);
+                $processed = processExistentialQuestions($data['api_key']);
+                echo json_encode(['success' => true, 'processed' => $processed]);
+                exit;
+                
+            case 'meta_learning':
+                if (!$has_key) { echo json_encode(['success' => false, 'error' => 'no_key']); exit; }
+                $data = json_decode(file_get_contents(APIKEY_FILE), true);
+                $extracted = extractWisdom($data['api_key']);
+                echo json_encode(['success' => true, 'extracted' => $extracted]);
+                exit;
+                
+            default:
+                echo json_encode(['success' => false, 'error' => 'Action inconnue']);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -270,7 +385,7 @@ async function saveKey() {
     const key = $('setup-key').value.trim();
     if (!pseudo || !key) { alert('Remplissez tous les champs'); return; }
     
-    const r = await post({ nexus_action: 'save_key', pseudo, key });
+    const r = await post({ nexus_action: 'save_apikey', pseudo, api_key: key });
     if (r.success) {
         log('Clé API enregistrée avec succès!', 'success');
         setTimeout(() => location.reload(), 1500);
@@ -281,12 +396,12 @@ async function saveKey() {
 async function loadStats() {
     const d = await post({ nexus_action: 'get_stats' });
     
-    $('stat-pages').textContent = d.pages_count || 0;
-    $('stat-apps').textContent = d.apps_count || 0;
-    $('stat-wisdom').textContent = d.wisdom_count || 0;
-    $('stat-score').textContent = Math.round((d.avg_self_score || 0) * 100) + '%';
-    $('questions-count').textContent = `${d.questions_pending || 0} en attente`;
-    $('wisdom-count').textContent = `${d.wisdom_count || 0} principes`;
+    $('stat-pages').textContent = d.pages || 0;
+    $('stat-apps').textContent = d.apps || 0;
+    $('stat-wisdom').textContent = d.wisdom || 0;
+    $('stat-score').textContent = Math.round((d.cycles || 0) * 100) + '%';
+    $('questions-count').textContent = `${d.questions || 0} en attente`;
+    $('wisdom-count').textContent = `${d.wisdom || 0} principes`;
     
     // Questions existentielles
     const qFeed = $('questions-feed');
